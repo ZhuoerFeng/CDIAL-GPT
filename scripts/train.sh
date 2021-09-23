@@ -1,0 +1,1 @@
+env CUDA_LAUNCH_BLOCKING=1 python train.py --pretrained --model_checkpoint LCCC_large/ --data_path data/esc_short.json --scheduler linear --gpt2

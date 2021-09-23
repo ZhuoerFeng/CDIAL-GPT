@@ -6,6 +6,8 @@ import logging
 import random
 from pprint import pformat
 from argparse import ArgumentParser
+import datetime
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -109,6 +111,8 @@ def train():
         model = model_class(config)
     model.to(args.device)
 
+    print(tokenizer.vocab_size)
+
     optimizer = AdamW([{'params': model.parameters(), 'initial_lr': args.lr}], lr=args.lr, correct_bias=True)
 
     logger.info("Prepare datasets")
@@ -125,6 +129,11 @@ def train():
     # Training function and trainer
     def update(engine, batch):
         input_ids, token_type_ids, lm_labels = tuple(input_tensor.to(args.device) for input_tensor in batch)
+
+        input_ids = input_ids[:, -512:]
+        token_type_ids = token_type_ids[:, -512:]
+        lm_labels = lm_labels[:, -512:]
+
         model.train()
         (lm_loss), *_ = model(input_ids, labels=lm_labels, token_type_ids=token_type_ids)
         loss = lm_loss / args.gradient_accumulation_steps
@@ -147,6 +156,9 @@ def train():
         model.eval()
         with torch.no_grad():
             input_ids, token_type_ids, lm_labels = tuple(input_tensor.to(args.device) for input_tensor in batch)
+            input_ids = input_ids[:, -512:]
+            token_type_ids = token_type_ids[:, -512:]
+            lm_labels = lm_labels[:, -512:]
             # logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             lm_logits, *_ = model(input_ids, token_type_ids=token_type_ids)
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
@@ -154,7 +166,7 @@ def train():
             return lm_logits_flat_shifted, lm_labels_flat_shifted
 
     evaluator = Engine(inference)
-
+        
     # Attach evaluation to trainer: we evaluate when we start the training and at the end of each epoch
     trainer.add_event_handler(Events.EPOCH_COMPLETED, lambda _: evaluator.run(val_loader))
     if args.n_epochs < 1:
@@ -168,6 +180,13 @@ def train():
         # if engine.state.iteration % max(int(0.1 * len(train_loader)), 1) == 0:
         if engine.state.iteration % args.valid_steps == 0:
             evaluator.run(val_loader)
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def save_model(engine):
+        tstamp = datetime.now().strftime("%d-%m-%Y_%H_%M_%S")
+        if not os.path.exists(f'./output/{tstamp}/'):
+            os.mkdir(f'./output/{tstamp}/')
+        model.save_pretrained(f'./output/{tstamp}/')
 
     # Make sure distributed data samplers split the dataset nicely between the distributed processes
     if args.distributed:
